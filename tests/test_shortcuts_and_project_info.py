@@ -1,0 +1,205 @@
+"""Offscreen tests for shortcuts, compact layout, and project information."""
+
+from __future__ import annotations
+
+import os
+
+import numpy as np
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+from app.services.settings_service import ShortcutSettingsService
+from app.shortcuts import (
+    DEFAULT_SHORTCUTS,
+    ShortcutConfigurationError,
+)
+from app.ui.keyboard_shortcuts_dialog import KeyboardShortcutsDialog
+from app.ui.main_window import MainWindow
+
+
+@pytest.fixture(scope="module")
+def application() -> QApplication:
+    return QApplication.instance() or QApplication([])
+
+
+def service_for(tmp_path) -> ShortcutSettingsService:
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    return ShortcutSettingsService(settings)
+
+
+def portable(sequence: QKeySequence) -> str:
+    return sequence.toString(QKeySequence.SequenceFormat.PortableText)
+
+
+def test_shortcut_defaults_and_persistence(tmp_path) -> None:
+    service = service_for(tmp_path)
+    assert service.load() == DEFAULT_SHORTCUTS
+    changed = {
+        "new_layer": "Ctrl+Shift+L",
+        "new_frame": "Ctrl+Alt+N",
+        "new_empty_frame": "",
+    }
+    assert service.save(changed) == changed
+    assert service_for(tmp_path).load() == changed
+
+
+def test_duplicate_shortcuts_are_not_saved(tmp_path) -> None:
+    service = service_for(tmp_path)
+    with pytest.raises(ShortcutConfigurationError, match="assigned to both"):
+        service.save(
+            {
+                "new_layer": "Shift+N",
+                "new_frame": "Shift+N",
+                "new_empty_frame": "Alt+B",
+            }
+        )
+    assert service.load() == DEFAULT_SHORTCUTS
+
+
+def test_corrupt_or_conflicting_settings_recover_to_defaults(tmp_path) -> None:
+    service = service_for(tmp_path)
+    service.settings.setValue("keyboard_shortcuts/new_layer", "Alt+N")
+    service.settings.setValue("keyboard_shortcuts/new_frame", "Alt+N")
+    service.settings.sync()
+    assert service.load() == DEFAULT_SHORTCUTS
+    assert service_for(tmp_path).load() == DEFAULT_SHORTCUTS
+
+
+def test_shortcut_dialog_blocks_conflicts_and_restores_defaults(application) -> None:
+    dialog = KeyboardShortcutsDialog(dict(DEFAULT_SHORTCUTS))
+    dialog.editors["new_frame"].setKeySequence(QKeySequence("Shift+N"))
+    assert not dialog.apply_changes()
+    assert "assigned to both" in dialog.error_label.text()
+    dialog.editors["new_layer"].clear()
+    dialog.restore_defaults()
+    assert dialog.current_shortcuts() == DEFAULT_SHORTCUTS
+
+
+def test_main_window_has_compact_canvas_timeline_layout(application, tmp_path) -> None:
+    window = MainWindow(service_for(tmp_path))
+    assert not hasattr(window, "layer_panel")
+    assert not hasattr(window, "properties")
+    assert window.centralWidget().layout().count() == 2
+    assert window.project_info_action.text() == "Project Info…"
+    assert window.keyboard_shortcuts_action.text() == "Keyboard Shortcuts…"
+    window.close()
+
+
+def test_default_shortcuts_are_shown_on_single_actions(application, tmp_path) -> None:
+    window = MainWindow(service_for(tmp_path))
+    assert portable(window.new_layer_action.shortcut()) == "Shift+N"
+    assert portable(window.new_frame_action.shortcut()) == "Alt+N"
+    assert portable(window.new_empty_frame_action.shortcut()) == "Alt+B"
+    assert not window.findChildren(QShortcut)
+    window.close()
+
+
+def test_actions_add_layer_duplicate_and_add_empty_frame(application, tmp_path) -> None:
+    window = MainWindow(service_for(tmp_path))
+    original_layers = len(window.project.layers)
+    window.new_layer_action.trigger()
+    assert len(window.project.layers) == original_layers + 1
+    assert window.project.layers[-1].name == "Layer 2"
+
+    layer_id = window.project.layers[0].id
+    window.project.frames[0].layer_pixels[layer_id][0, 0] = [5, 6, 7, 255]
+    source = window.project.frames[0].layer_pixels[layer_id]
+    window.frame_index = 0
+    window.new_frame_action.trigger()
+    duplicate = window.project.frames[1].layer_pixels[layer_id]
+    assert np.array_equal(source, duplicate)
+    assert source is not duplicate
+    assert window.frame_index == 1
+
+    window.frame_index = 0
+    window.new_empty_frame_action.trigger()
+    assert window.frame_index == 1
+    assert not window.project.frames[1].layer_pixels[layer_id].any()
+    window.dirty = False
+    window.close()
+
+
+def test_layer_actions_refresh_timeline_and_canvas_selection(application, tmp_path) -> None:
+    window = MainWindow(service_for(tmp_path))
+    window.new_layer_action.trigger()
+    assert window.timeline.table.rowCount() == 2
+    assert window.layer_index == 1
+    assert window.canvas.layer_index == 1
+    window.delete_layer_action.trigger()
+    assert window.timeline.table.rowCount() == 1
+    assert window.layer_index == 0
+    assert window.canvas.layer_index == 0
+    window.dirty = False
+    window.close()
+
+
+def test_keyboard_shortcut_invokes_command_once(application, tmp_path) -> None:
+    window = MainWindow(service_for(tmp_path))
+    window.show()
+    window.activateWindow()
+    window.setFocus()
+    application.processEvents()
+    before = len(window.project.layers)
+    QTest.keyClick(window, Qt.Key.Key_N, Qt.KeyboardModifier.ShiftModifier)
+    application.processEvents()
+    assert len(window.project.layers) == before + 1
+
+    frame_count = len(window.project.frames)
+    QTest.keyClick(window, Qt.Key.Key_N, Qt.KeyboardModifier.AltModifier)
+    application.processEvents()
+    assert len(window.project.frames) == frame_count + 1
+    frame_count = len(window.project.frames)
+    QTest.keyClick(window, Qt.Key.Key_B, Qt.KeyboardModifier.AltModifier)
+    application.processEvents()
+    assert len(window.project.frames) == frame_count + 1
+    window.dirty = False
+    window.close()
+
+
+def test_changed_shortcuts_update_actions_and_persist(application, tmp_path) -> None:
+    service = service_for(tmp_path)
+    window = MainWindow(service)
+    changed = {
+        "new_layer": "Ctrl+Shift+L",
+        "new_frame": "Ctrl+Alt+N",
+        "new_empty_frame": "",
+    }
+    assert window.apply_shortcuts(changed)
+    assert portable(window.new_layer_action.shortcut()) == "Ctrl+Shift+L"
+    assert window.new_empty_frame_action.shortcut().isEmpty()
+    assert service_for(tmp_path).load() == changed
+    window.close()
+
+
+def test_project_info_uses_latest_project_state(application, tmp_path) -> None:
+    window = MainWindow(service_for(tmp_path))
+    first = window.create_project_info_dialog()
+    assert first.values["Project Name"] == "Untitled"
+    assert first.values["File"] == "Not Saved"
+    assert first.values["Canvas"] == "64 × 64"
+    assert first.values["Frames"] == "1"
+    assert first.values["Layers"] == "1"
+    assert first.values["Format Version"] == "1"
+    assert first.values["Application"] == "Pixel Effect Maker v0.0.01"
+
+    window.project.name = "Burst"
+    window.project.add_frame()
+    window.project.add_layer()
+    window.project.fps = 24
+    window.project.loop = False
+    window.dirty = True
+    latest = window.create_project_info_dialog()
+    assert latest.values["Project Name"] == "Burst"
+    assert latest.values["Frames"] == "2"
+    assert latest.values["Layers"] == "2"
+    assert latest.values["FPS"] == "24"
+    assert latest.values["Loop"] == "Disabled"
+    assert latest.values["Modified"] == "Yes"
+    window.dirty = False
+    window.close()

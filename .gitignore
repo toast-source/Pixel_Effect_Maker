@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+dist/
+*.spec.bak
+exports/*
+!exports/.gitkeep
+projects/*
+!projects/.gitkeep
