@@ -20,6 +20,7 @@ SHORTCUT_COMMANDS = (
     ShortcutCommand("new_layer", "New Layer", "Shift+N"),
     ShortcutCommand("new_frame", "New Frame", "Alt+N"),
     ShortcutCommand("new_empty_frame", "New Empty Frame", "Alt+B"),
+    ShortcutCommand("play_stop_animation", "Play / Stop Animation", "Enter"),
 )
 
 DEFAULT_SHORTCUTS = {

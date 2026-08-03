@@ -28,7 +28,7 @@ class TimelineWidget(QWidget):
     delete_requested = Signal()
     add_layer_requested = Signal()
     delete_layer_requested = Signal()
-    play_toggled = Signal(bool)
+    play_requested = Signal()
     fps_changed = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -36,7 +36,6 @@ class TimelineWidget(QWidget):
         self._project: Project | None = None
         layout = QVBoxLayout(self)
         toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("Layer × Frame Timeline"))
         self.selection_label = QLabel("Layer 1 · Frame 1")
         self.selection_label.setStyleSheet("font-weight: bold;")
         toolbar.addWidget(self.selection_label)
@@ -55,8 +54,7 @@ class TimelineWidget(QWidget):
             toolbar.addWidget(button)
 
         self.play_button = QPushButton("▶")
-        self.play_button.setCheckable(True)
-        self.play_button.toggled.connect(self._on_play_toggled)
+        self.play_button.clicked.connect(self.play_requested)
         toolbar.addWidget(self.play_button)
         toolbar.addWidget(QLabel("FPS"))
         self.fps_spin = QSpinBox()
@@ -80,9 +78,12 @@ class TimelineWidget(QWidget):
         self.table.currentCellChanged.connect(self._on_current_cell_changed)
         layout.addWidget(self.table)
 
-    def _on_play_toggled(self, playing: bool) -> None:
+    def set_playing(self, playing: bool) -> None:
+        """Synchronize the button display with the main playback QAction."""
         self.play_button.setText("■" if playing else "▶")
-        self.play_toggled.emit(playing)
+        self.play_button.setToolTip(
+            "Stop animation" if playing else "Play animation"
+        )
 
     def _on_current_cell_changed(
         self, row: int, column: int, previous_row: int, previous_column: int

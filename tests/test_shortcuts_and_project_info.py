@@ -44,6 +44,7 @@ def test_shortcut_defaults_and_persistence(tmp_path) -> None:
         "new_layer": "Ctrl+Shift+L",
         "new_frame": "Ctrl+Alt+N",
         "new_empty_frame": "",
+        "play_stop_animation": "Space",
     }
     assert service.save(changed) == changed
     assert service_for(tmp_path).load() == changed
@@ -57,6 +58,7 @@ def test_duplicate_shortcuts_are_not_saved(tmp_path) -> None:
                 "new_layer": "Shift+N",
                 "new_frame": "Shift+N",
                 "new_empty_frame": "Alt+B",
+                "play_stop_animation": "Enter",
             }
         )
     assert service.load() == DEFAULT_SHORTCUTS
@@ -69,6 +71,22 @@ def test_corrupt_or_conflicting_settings_recover_to_defaults(tmp_path) -> None:
     service.settings.sync()
     assert service.load() == DEFAULT_SHORTCUTS
     assert service_for(tmp_path).load() == DEFAULT_SHORTCUTS
+
+
+def test_existing_shortcuts_gain_playback_default_without_reset(tmp_path) -> None:
+    service = service_for(tmp_path)
+    existing = {
+        "new_layer": "Ctrl+Shift+L",
+        "new_frame": "Ctrl+Alt+N",
+        "new_empty_frame": "Space",
+    }
+    for key, value in existing.items():
+        service.settings.setValue(f"keyboard_shortcuts/{key}", value)
+    service.settings.sync()
+    loaded = service.load()
+    assert {key: loaded[key] for key in existing} == existing
+    assert loaded["play_stop_animation"] == "Enter"
+    assert service.settings.contains("keyboard_shortcuts/play_stop_animation")
 
 
 def test_shortcut_dialog_blocks_conflicts_and_restores_defaults(application) -> None:
@@ -86,7 +104,8 @@ def test_main_window_has_compact_canvas_timeline_layout(application, tmp_path) -
     assert not hasattr(window, "layer_panel")
     assert not hasattr(window, "properties")
     assert window.centralWidget().layout().count() == 2
-    assert window.project_info_action.text() == "Project Info…"
+    assert window.project_settings_action.text() == "Project Settings…"
+    assert not hasattr(window, "project_info_action")
     assert window.keyboard_shortcuts_action.text() == "Keyboard Shortcuts…"
     window.close()
 
@@ -96,6 +115,7 @@ def test_default_shortcuts_are_shown_on_single_actions(application, tmp_path) ->
     assert portable(window.new_layer_action.shortcut()) == "Shift+N"
     assert portable(window.new_frame_action.shortcut()) == "Alt+N"
     assert portable(window.new_empty_frame_action.shortcut()) == "Alt+B"
+    assert portable(window.play_action.shortcut()) == "Enter"
     assert not window.findChildren(QShortcut)
     window.close()
 
@@ -169,6 +189,7 @@ def test_changed_shortcuts_update_actions_and_persist(application, tmp_path) -> 
         "new_layer": "Ctrl+Shift+L",
         "new_frame": "Ctrl+Alt+N",
         "new_empty_frame": "",
+        "play_stop_animation": "Space",
     }
     assert window.apply_shortcuts(changed)
     assert portable(window.new_layer_action.shortcut()) == "Ctrl+Shift+L"
@@ -177,16 +198,15 @@ def test_changed_shortcuts_update_actions_and_persist(application, tmp_path) -> 
     window.close()
 
 
-def test_project_info_uses_latest_project_state(application, tmp_path) -> None:
+def test_project_settings_uses_latest_project_state(application, tmp_path) -> None:
     window = MainWindow(service_for(tmp_path))
-    first = window.create_project_info_dialog()
-    assert first.values["Project Name"] == "Untitled"
-    assert first.values["File"] == "Not Saved"
-    assert first.values["Canvas"] == "64 × 64"
-    assert first.values["Frames"] == "1"
-    assert first.values["Layers"] == "1"
-    assert first.values["Format Version"] == "1"
-    assert first.values["Application"] == "Pixel Effect Maker v0.0.01"
+    first = window.create_project_settings_dialog()
+    assert first.name_edit.text() == "Untitled"
+    assert first.current_size_label.text() == "64 × 64"
+    assert "File: Not Saved" in first.info_label.text()
+    assert "Frames: 1" in first.info_label.text()
+    assert "Layers: 1" in first.info_label.text()
+    assert "Format: 1" in first.info_label.text()
 
     window.project.name = "Burst"
     window.project.add_frame()
@@ -194,12 +214,11 @@ def test_project_info_uses_latest_project_state(application, tmp_path) -> None:
     window.project.fps = 24
     window.project.loop = False
     window.dirty = True
-    latest = window.create_project_info_dialog()
-    assert latest.values["Project Name"] == "Burst"
-    assert latest.values["Frames"] == "2"
-    assert latest.values["Layers"] == "2"
-    assert latest.values["FPS"] == "24"
-    assert latest.values["Loop"] == "Disabled"
-    assert latest.values["Modified"] == "Yes"
+    latest = window.create_project_settings_dialog()
+    assert latest.name_edit.text() == "Burst"
+    assert latest.fps_spin.value() == 24
+    assert not latest.loop_check.isChecked()
+    assert "Frames: 2" in latest.info_label.text()
+    assert "Layers: 2" in latest.info_label.text()
     window.dirty = False
     window.close()

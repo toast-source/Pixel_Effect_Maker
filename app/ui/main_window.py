@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSignalBlocker, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
@@ -18,6 +18,13 @@ from PySide6.QtWidgets import (
 from app.models.project import Project, ProjectError
 from app.services.export_service import ExportError, export_png_frames
 from app.services.project_io import ProjectIOError, load_project, save_project
+from app.services.canvas_resize_service import (
+    CanvasResizeError,
+    CanvasResizeMode,
+    resize_canvas,
+    scale_project,
+)
+from app.services.sample_project_service import create_playback_test_project
 from app.services.settings_service import SettingsError, ShortcutSettingsService
 from app.shortcuts import DEFAULT_SHORTCUTS
 from app.version import get_display_name
@@ -25,7 +32,7 @@ from app.version import get_display_name
 from .canvas_widget import CanvasWidget
 from .keyboard_shortcuts_dialog import KeyboardShortcutsDialog
 from .new_project_dialog import NewProjectDialog
-from .project_info_dialog import ProjectInfoDialog
+from .project_settings_dialog import ProjectSettingsDialog, ProjectSettingsValues
 from .timeline_widget import TimelineWidget
 
 
@@ -76,13 +83,15 @@ class MainWindow(QMainWindow):
         self.save_action.setShortcut(QKeySequence.StandardKey.Save)
         self.save_as_action = QAction("Save As…", self)
         self.save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
-        self.project_info_action = QAction("Project Info…", self)
+        self.project_settings_action = QAction("Project Settings…", self)
+        self.playback_test_action = QAction("Create Playback Test Project", self)
         self.export_action = QAction("Export PNG Frames…", self)
         file_menu.addActions(
             [self.new_action, self.open_action, self.save_action, self.save_as_action]
         )
         file_menu.addSeparator()
-        file_menu.addAction(self.project_info_action)
+        file_menu.addAction(self.project_settings_action)
+        file_menu.addAction(self.playback_test_action)
         file_menu.addSeparator()
         file_menu.addAction(self.export_action)
 
@@ -107,6 +116,10 @@ class MainWindow(QMainWindow):
             ]
         )
 
+        animation_menu = self.menuBar().addMenu("Animation")
+        self.play_action = QAction("Play / Stop Animation", self, checkable=True)
+        animation_menu.addAction(self.play_action)
+
         view_menu = self.menuBar().addMenu("View")
         self.status_bar_action = QAction("Status Bar", self, checkable=True)
         self.status_bar_action.setChecked(True)
@@ -123,6 +136,7 @@ class MainWindow(QMainWindow):
             "new_layer": self.new_layer_action,
             "new_frame": self.new_frame_action,
             "new_empty_frame": self.new_empty_frame_action,
+            "play_stop_animation": self.play_action,
         }
         self._update_action_shortcuts(self.shortcuts)
 
@@ -131,7 +145,8 @@ class MainWindow(QMainWindow):
         self.open_action.triggered.connect(self.open_project)
         self.save_action.triggered.connect(self.save)
         self.save_as_action.triggered.connect(self.save_as)
-        self.project_info_action.triggered.connect(self.show_project_info)
+        self.project_settings_action.triggered.connect(self.show_project_settings)
+        self.playback_test_action.triggered.connect(self.create_playback_test)
         self.export_action.triggered.connect(self.export_frames)
         self.keyboard_shortcuts_action.triggered.connect(
             self.show_keyboard_shortcuts
@@ -141,6 +156,7 @@ class MainWindow(QMainWindow):
         self.delete_frame_action.triggered.connect(self.delete_frame)
         self.new_layer_action.triggered.connect(self.add_layer)
         self.delete_layer_action.triggered.connect(self.delete_layer)
+        self.play_action.toggled.connect(self.set_playing)
         self.status_bar_action.toggled.connect(self.statusBar().setVisible)
         self.timeline.add_requested.connect(self.add_frame)
         self.timeline.duplicate_requested.connect(self.duplicate_frame)
@@ -148,7 +164,7 @@ class MainWindow(QMainWindow):
         self.timeline.add_layer_requested.connect(self.add_layer)
         self.timeline.delete_layer_requested.connect(self.delete_layer)
         self.timeline.cell_selected.connect(self.select_cell)
-        self.timeline.play_toggled.connect(self.set_playing)
+        self.timeline.play_requested.connect(self.play_action.trigger)
         self.timeline.fps_changed.connect(self.set_fps)
 
     def _refresh_all(self) -> None:
@@ -158,6 +174,7 @@ class MainWindow(QMainWindow):
         self.canvas.set_frame(self.frame_index)
         self.canvas.set_layer(self.layer_index)
         self.timeline.refresh(self.project, self.layer_index, self.frame_index)
+        self.timeline.set_playing(self.play_timer.isActive())
         self._update_title()
         self._refresh_selection_status()
 
@@ -193,6 +210,7 @@ class MainWindow(QMainWindow):
         dialog = NewProjectDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        self.set_playing(False)
         settings = dialog.settings()
         self.project = Project.create_default(
             settings.name,
@@ -220,6 +238,7 @@ class MainWindow(QMainWindow):
         except ProjectIOError as exc:
             QMessageBox.critical(self, "Open Failed", str(exc))
             return
+        self.set_playing(False)
         self.project_path = Path(path)
         self.frame_index = self.layer_index = 0
         self.dirty = False
@@ -266,14 +285,88 @@ class MainWindow(QMainWindow):
             self, "Export Complete", f"Exported {len(written)} PNG frame(s)."
         )
 
-    def create_project_info_dialog(self) -> ProjectInfoDialog:
-        """Create a fresh read-only dialog from current project state."""
-        return ProjectInfoDialog(
-            self.project, self.project_path, self.dirty, self
+    def create_project_settings_dialog(self) -> ProjectSettingsDialog:
+        """Create an editable dialog from the latest project values."""
+        return ProjectSettingsDialog(
+            self.project,
+            self.project_path,
+            self.apply_project_settings,
+            self,
         )
 
-    def show_project_info(self) -> None:
-        self.create_project_info_dialog().exec()
+    def show_project_settings(self) -> None:
+        self.create_project_settings_dialog().exec()
+
+    def apply_project_settings(self, values: ProjectSettingsValues) -> bool:
+        """Validate and atomically apply general and canvas settings."""
+        size_changed = (values.width, values.height) != (
+            self.project.width,
+            self.project.height,
+        )
+        general_changed = (
+            values.name != self.project.name
+            or values.fps != self.project.fps
+            or values.loop != self.project.loop
+        )
+        if not size_changed and not general_changed:
+            return True
+        if size_changed and self._canvas_change_needs_confirmation(values):
+            if not self._confirm_canvas_change(values):
+                return False
+        if size_changed:
+            try:
+                if values.resize_mode is CanvasResizeMode.SCALE:
+                    scale_project(self.project, values.width, values.height)
+                else:
+                    resize_canvas(
+                        self.project, values.width, values.height, values.anchor
+                    )
+            except CanvasResizeError as exc:
+                QMessageBox.critical(self, "Canvas Resize Failed", str(exc))
+                return False
+        self.project.name = values.name
+        self.project.fps = values.fps
+        self.project.loop = values.loop
+        if self.play_timer.isActive():
+            self.play_timer.setInterval(max(1, round(1000 / values.fps)))
+        self._mark_dirty()
+        self._refresh_all()
+        return True
+
+    def _canvas_change_needs_confirmation(
+        self, values: ProjectSettingsValues
+    ) -> bool:
+        return (
+            values.width < self.project.width
+            or values.height < self.project.height
+            or values.resize_mode is CanvasResizeMode.SCALE
+            or self.dirty
+        )
+
+    def _confirm_canvas_change(self, values: ProjectSettingsValues) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "Confirm Canvas Change",
+            f"Current size: {self.project.width} × {self.project.height}\n"
+            f"New size: {values.width} × {values.height}\n"
+            f"Mode: {values.resize_mode.value}\n\n"
+            "This operation may crop or replace pixel data and cannot currently be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def create_playback_test(self) -> None:
+        """Replace the current project with the built-in playback diagnostic."""
+        if not self._confirm_discard():
+            return
+        self.set_playing(False)
+        self.project = create_playback_test_project()
+        self.project_path = None
+        self.frame_index = self.layer_index = 0
+        self.dirty = True
+        self._refresh_all()
+        self.statusBar().showMessage("Playback test project created", 3000)
 
     def show_keyboard_shortcuts(self) -> None:
         dialog = KeyboardShortcutsDialog(self.shortcuts, self)
@@ -364,10 +457,14 @@ class MainWindow(QMainWindow):
             self.play_timer.setInterval(max(1, round(1000 / value)))
 
     def set_playing(self, playing: bool) -> None:
+        if self.play_action.isChecked() != playing:
+            with QSignalBlocker(self.play_action):
+                self.play_action.setChecked(playing)
         if playing:
             self.play_timer.start(max(1, round(1000 / self.project.fps)))
         else:
             self.play_timer.stop()
+        self.timeline.set_playing(playing)
 
     def _advance_playback(self) -> None:
         next_index = self.frame_index + 1
@@ -375,7 +472,7 @@ class MainWindow(QMainWindow):
             if self.project.loop:
                 next_index = 0
             else:
-                self.timeline.play_button.setChecked(False)
+                self.set_playing(False)
                 return
         self.select_frame(next_index)
 

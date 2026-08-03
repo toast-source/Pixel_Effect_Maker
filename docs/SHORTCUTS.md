@@ -7,6 +7,7 @@
 | New Layer | `Shift+N` | 새 기본 레이어를 만들고 선택 |
 | New Frame | `Alt+N` | 현재 프레임을 독립 복사해 다음 위치에 삽입 |
 | New Empty Frame | `Alt+B` | 현재 위치 다음에 투명 프레임 삽입 |
+| Play / Stop Animation | `Enter` | 현재 애니메이션 재생 또는 정지 |
 
 ## 변경 방법
 

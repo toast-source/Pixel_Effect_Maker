@@ -25,6 +25,11 @@ class ShortcutSettingsService:
         self.settings = settings or QSettings("SOUTHPAW GAMES", "Pixel Effect Maker")
 
     def load(self) -> dict[str, str]:
+        missing_keys = [
+            command.key
+            for command in SHORTCUT_COMMANDS
+            if not self.settings.contains(f"{self.PREFIX}/{command.key}")
+        ]
         values = {
             command.key: self.settings.value(
                 f"{self.PREFIX}/{command.key}", command.default, type=str
@@ -32,11 +37,14 @@ class ShortcutSettingsService:
             for command in SHORTCUT_COMMANDS
         }
         try:
-            return validate_shortcuts(values)
+            normalized = validate_shortcuts(values)
         except ShortcutConfigurationError:
             defaults = dict(DEFAULT_SHORTCUTS)
             self.save(defaults)
             return defaults
+        if missing_keys:
+            return self.save(normalized)
+        return normalized
 
     def save(self, values: dict[str, str]) -> dict[str, str]:
         normalized = validate_shortcuts(values)

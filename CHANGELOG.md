@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.0.02 - 2026-08-03
+
+### Added
+
+- 편집 가능한 Project Settings 대화상자
+- 캔버스 전용 크기 변경과 이미지 포함 스케일 변경
+- 캔버스 전용 변경을 위한 9개 Anchor
+- Enter 기반 애니메이션 재생·정지 단축키
+- 재생 확인용 8프레임 Playback Test Project
+
+### Changed
+
+- Project Info를 Project Settings로 교체
+- FPS와 Loop를 프로젝트 생성 후 변경 가능하도록 개선
+- Scale 변환을 픽셀아트용 최근접 이웃으로 고정
+- 타임라인의 `Layer × Frame Timeline` 제목과 여백 제거
+
 ## v0.0.01 - 2026-08-03
 
 ### Added
