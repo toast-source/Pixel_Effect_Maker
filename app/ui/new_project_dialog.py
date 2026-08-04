@@ -27,6 +27,7 @@ class NewProjectSettings:
     height: int
     fps: int
     loop: bool
+    frame_count: int = 1
 
 
 class NewProjectDialog(QDialog):
@@ -38,11 +39,12 @@ class NewProjectDialog(QDialog):
     MIN_FPS = 1
     MAX_FPS = 120
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, localization=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("New Project")
         self.setModal(True)
         self._changing_preset = False
+        self.localization = localization or getattr(parent, "localization", None)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -50,6 +52,7 @@ class NewProjectDialog(QDialog):
         self.width_spin = QSpinBox()
         self.height_spin = QSpinBox()
         self.fps_spin = QSpinBox()
+        self.frame_count_spin = QSpinBox()
         self.loop_check = QCheckBox("Loop animation")
         self.loop_check.setChecked(True)
         self.preset_combo = QComboBox()
@@ -61,16 +64,22 @@ class NewProjectDialog(QDialog):
         self.fps_spin.setRange(self.MIN_FPS, self.MAX_FPS)
         self.fps_spin.setValue(12)
         self.fps_spin.setSuffix(" FPS")
+        self.frame_count_spin.setRange(1, 999); self.frame_count_spin.setValue(1)
         for size in self.PRESETS:
             self.preset_combo.addItem(f"{size} × {size}", size)
         self.preset_combo.addItem("Custom", None)
         self.preset_combo.setCurrentText("64 × 64")
 
-        form.addRow("Project name", self.name_edit)
-        form.addRow("Canvas preset", self.preset_combo)
-        form.addRow("Canvas width", self.width_spin)
-        form.addRow("Canvas height", self.height_spin)
-        form.addRow("Playback speed", self.fps_spin)
+        self.form_labels = [
+            QLabel("Project name"), QLabel("Canvas preset"), QLabel("Canvas width"),
+            QLabel("Canvas height"), QLabel("Playback speed"), QLabel("Initial frames"),
+        ]
+        form.addRow(self.form_labels[0], self.name_edit)
+        form.addRow(self.form_labels[1], self.preset_combo)
+        form.addRow(self.form_labels[2], self.width_spin)
+        form.addRow(self.form_labels[3], self.height_spin)
+        form.addRow(self.form_labels[4], self.fps_spin)
+        form.addRow(self.form_labels[5], self.frame_count_spin)
         form.addRow("", self.loop_check)
         layout.addLayout(form)
 
@@ -94,6 +103,26 @@ class NewProjectDialog(QDialog):
         self.height_spin.valueChanged.connect(self._mark_custom_size)
         self.name_edit.textChanged.connect(self._validate)
         self._validate()
+        if self.localization is not None:
+            self.localization.language_changed.connect(self.retranslate_ui)
+            self.retranslate_ui()
+
+    def retranslate_ui(self, *args) -> None:
+        if self.localization is None:
+            return
+        t = self.localization.text
+        self.setWindowTitle(t("dialog.new_project"))
+        labels = tuple(t(key) for key in (
+            "dialog.project_name", "dialog.canvas_preset", "dialog.canvas_width",
+            "dialog.canvas_height", "dialog.playback_speed", "startup.initial_frames"
+        ))
+        for label, text in zip(self.form_labels, labels, strict=True):
+            label.setText(text)
+        self.loop_check.setText(t("dialog.loop"))
+        self.create_button.setText(t("dialog.create"))
+        custom_index = self.preset_combo.count() - 1
+        self.preset_combo.setItemText(custom_index, t("dialog.custom"))
+        self._validate()
 
     def _apply_preset(self) -> None:
         size = self.preset_combo.currentData()
@@ -109,11 +138,12 @@ class NewProjectDialog(QDialog):
             return
         size = self.preset_combo.currentData()
         if size != self.width_spin.value() or size != self.height_spin.value():
-            self.preset_combo.setCurrentText("Custom")
+            self.preset_combo.setCurrentIndex(self.preset_combo.count() - 1)
 
     def _validate(self) -> None:
         valid = bool(self.name_edit.text().strip())
-        self.validation_label.setText("" if valid else "Enter a project name.")
+        message = self.localization.text("dialog.enter_name") if self.localization else "Enter a project name."
+        self.validation_label.setText("" if valid else message)
         self.create_button.setEnabled(valid)
 
     def settings(self) -> NewProjectSettings:
@@ -127,4 +157,5 @@ class NewProjectDialog(QDialog):
             height=self.height_spin.value(),
             fps=self.fps_spin.value(),
             loop=self.loop_check.isChecked(),
+            frame_count=self.frame_count_spin.value(),
         )

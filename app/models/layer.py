@@ -14,6 +14,8 @@ class Layer:
     visible: bool = True
     opacity: float = 1.0
     id: str = field(default_factory=lambda: uuid4().hex)
+    kind: str = "normal"
+    generator_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -21,6 +23,8 @@ class Layer:
             "name": self.name,
             "visible": self.visible,
             "opacity": self.opacity,
+            "kind": self.kind,
+            "generator_id": self.generator_id,
         }
 
     @classmethod
@@ -30,4 +34,8 @@ class Layer:
             name=str(data.get("name", "Layer")),
             visible=bool(data.get("visible", True)),
             opacity=float(data.get("opacity", 1.0)),
+            kind=str(data.get("kind", "normal")),
+            generator_id=(
+                None if data.get("generator_id") is None else str(data["generator_id"])
+            ),
         )

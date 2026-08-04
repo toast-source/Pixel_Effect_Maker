@@ -4,6 +4,9 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+*.exe
+*.zip
+*.log
 *.spec.bak
 exports/*
 !exports/.gitkeep

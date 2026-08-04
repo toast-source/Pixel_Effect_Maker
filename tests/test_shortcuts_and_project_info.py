@@ -30,6 +30,7 @@ def application() -> QApplication:
 
 def service_for(tmp_path) -> ShortcutSettingsService:
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    settings.setValue("ui/language", "en")
     return ShortcutSettingsService(settings)
 
 
@@ -46,8 +47,13 @@ def test_shortcut_defaults_and_persistence(tmp_path) -> None:
         "new_empty_frame": "",
         "play_stop_animation": "Space",
     }
-    assert service.save(changed) == changed
-    assert service_for(tmp_path).load() == changed
+    normalized = service.save(changed)
+    assert normalized["new_layer"] == ["Ctrl+Shift+L"]
+    assert normalized["new_frame"] == ["Ctrl+Alt+N"]
+    assert normalized["new_empty_frame"] == []
+    assert normalized["play_stop_animation"] == ["Space"]
+    assert normalized["previous_frame"] == ["Left", "<"]
+    assert service_for(tmp_path).load() == normalized
 
 
 def test_duplicate_shortcuts_are_not_saved(tmp_path) -> None:
@@ -62,6 +68,15 @@ def test_duplicate_shortcuts_are_not_saved(tmp_path) -> None:
             }
         )
     assert service.load() == DEFAULT_SHORTCUTS
+
+
+def test_alternate_shortcut_conflicts_are_rejected(tmp_path) -> None:
+    service = service_for(tmp_path)
+    changed = {key: list(value) for key, value in DEFAULT_SHORTCUTS.items()}
+    changed["previous_frame"] = ["Left", "Space"]
+    changed["play_stop_animation"] = ["Space"]
+    with pytest.raises(ShortcutConfigurationError, match="assigned to both"):
+        service.save(changed)
 
 
 def test_corrupt_or_conflicting_settings_recover_to_defaults(tmp_path) -> None:
@@ -84,8 +99,10 @@ def test_existing_shortcuts_gain_playback_default_without_reset(tmp_path) -> Non
         service.settings.setValue(f"keyboard_shortcuts/{key}", value)
     service.settings.sync()
     loaded = service.load()
-    assert {key: loaded[key] for key in existing} == existing
-    assert loaded["play_stop_animation"] == "Enter"
+    assert {key: loaded[key] for key in existing} == {
+        key: [value] for key, value in existing.items()
+    }
+    assert loaded["play_stop_animation"] == ["Enter"]
     assert service.settings.contains("keyboard_shortcuts/play_stop_animation")
 
 
@@ -115,8 +132,19 @@ def test_default_shortcuts_are_shown_on_single_actions(application, tmp_path) ->
     assert portable(window.new_layer_action.shortcut()) == "Shift+N"
     assert portable(window.new_frame_action.shortcut()) == "Alt+N"
     assert portable(window.new_empty_frame_action.shortcut()) == "Alt+B"
-    assert portable(window.play_action.shortcut()) == "Enter"
-    assert not window.findChildren(QShortcut)
+    assert window.play_action.shortcut().isEmpty()
+    assert window.playback_shortcut_controller.sequence_text == "Enter"
+    assert window.playback_shortcut_controller.active_shortcut_count() == 2
+    playback_shortcuts = window.findChildren(QShortcut)
+    assert len(playback_shortcuts) == 6
+    assert {portable(shortcut.key()) for shortcut in playback_shortcuts} == {
+        "Return",
+        "Enter",
+        "Left",
+        "Shift+,",
+        "Right",
+        "Shift+.",
+    }
     window.close()
 
 
@@ -194,7 +222,11 @@ def test_changed_shortcuts_update_actions_and_persist(application, tmp_path) -> 
     assert window.apply_shortcuts(changed)
     assert portable(window.new_layer_action.shortcut()) == "Ctrl+Shift+L"
     assert window.new_empty_frame_action.shortcut().isEmpty()
-    assert service_for(tmp_path).load() == changed
+    restored = service_for(tmp_path).load()
+    assert restored["new_layer"] == ["Ctrl+Shift+L"]
+    assert restored["new_frame"] == ["Ctrl+Alt+N"]
+    assert restored["new_empty_frame"] == []
+    assert restored["play_stop_animation"] == ["Space"]
     window.close()
 
 
@@ -206,7 +238,7 @@ def test_project_settings_uses_latest_project_state(application, tmp_path) -> No
     assert "File: Not Saved" in first.info_label.text()
     assert "Frames: 1" in first.info_label.text()
     assert "Layers: 1" in first.info_label.text()
-    assert "Format: 1" in first.info_label.text()
+    assert "Format: 5" in first.info_label.text()
 
     window.project.name = "Burst"
     window.project.add_frame()

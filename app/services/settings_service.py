@@ -24,7 +24,7 @@ class ShortcutSettingsService:
     def __init__(self, settings: QSettings | None = None) -> None:
         self.settings = settings or QSettings("SOUTHPAW GAMES", "Pixel Effect Maker")
 
-    def load(self) -> dict[str, str]:
+    def load(self) -> dict[str, list[str]]:
         missing_keys = [
             command.key
             for command in SHORTCUT_COMMANDS
@@ -32,7 +32,7 @@ class ShortcutSettingsService:
         ]
         values = {
             command.key: self.settings.value(
-                f"{self.PREFIX}/{command.key}", command.default, type=str
+                f"{self.PREFIX}/{command.key}", list(command.default_sequences)
             )
             for command in SHORTCUT_COMMANDS
         }
@@ -46,7 +46,9 @@ class ShortcutSettingsService:
             return self.save(normalized)
         return normalized
 
-    def save(self, values: dict[str, str]) -> dict[str, str]:
+    def save(
+        self, values: dict[str, str | list[str] | tuple[str, ...]]
+    ) -> dict[str, list[str]]:
         normalized = validate_shortcuts(values)
         for key, shortcut in normalized.items():
             self.settings.setValue(f"{self.PREFIX}/{key}", shortcut)
@@ -55,5 +57,5 @@ class ShortcutSettingsService:
             raise SettingsError("Could not save keyboard shortcut settings.")
         return normalized
 
-    def restore_defaults(self) -> dict[str, str]:
-        return self.save(dict(DEFAULT_SHORTCUTS))
+    def restore_defaults(self) -> dict[str, list[str]]:
+        return self.save({key: list(value) for key, value in DEFAULT_SHORTCUTS.items()})

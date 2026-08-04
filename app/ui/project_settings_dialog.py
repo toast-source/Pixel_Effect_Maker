@@ -50,28 +50,32 @@ class ProjectSettingsDialog(QDialog):
         project_path: Path | None,
         apply_callback: Callable[[ProjectSettingsValues], bool],
         parent: QWidget | None = None,
+        localization=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Project Settings")
         self.setModal(True)
         self._apply_callback = apply_callback
+        self.localization = localization
 
         layout = QVBoxLayout(self)
-        general_group = QGroupBox("General")
-        general_form = QFormLayout(general_group)
+        self.general_group = QGroupBox("General")
+        general_form = QFormLayout(self.general_group)
         self.name_edit = QLineEdit(project.name)
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(1, 120)
         self.fps_spin.setValue(project.fps)
         self.loop_check = QCheckBox("Loop animation")
         self.loop_check.setChecked(project.loop)
-        general_form.addRow("Project Name", self.name_edit)
-        general_form.addRow("FPS", self.fps_spin)
+        self.name_label = QLabel("Project Name")
+        self.fps_label = QLabel("FPS")
+        general_form.addRow(self.name_label, self.name_edit)
+        general_form.addRow(self.fps_label, self.fps_spin)
         general_form.addRow("", self.loop_check)
-        layout.addWidget(general_group)
+        layout.addWidget(self.general_group)
 
-        canvas_group = QGroupBox("Canvas")
-        canvas_layout = QVBoxLayout(canvas_group)
+        self.canvas_group = QGroupBox("Canvas")
+        canvas_layout = QVBoxLayout(self.canvas_group)
         canvas_form = QFormLayout()
         self.current_size_label = QLabel(f"{project.width} × {project.height}")
         self.width_spin = QSpinBox()
@@ -83,9 +87,12 @@ class ProjectSettingsDialog(QDialog):
             spin.setRange(1, 1024)
             spin.setValue(value)
             spin.setSuffix(" px")
-        canvas_form.addRow("Current Size", self.current_size_label)
-        canvas_form.addRow("New Width", self.width_spin)
-        canvas_form.addRow("New Height", self.height_spin)
+        self.current_size_field_label = QLabel("Current Size")
+        self.width_label = QLabel("New Width")
+        self.height_label = QLabel("New Height")
+        canvas_form.addRow(self.current_size_field_label, self.current_size_label)
+        canvas_form.addRow(self.width_label, self.width_spin)
+        canvas_form.addRow(self.height_label, self.height_spin)
         canvas_layout.addLayout(canvas_form)
 
         self.canvas_only_radio = QRadioButton(CanvasResizeMode.CANVAS_ONLY.value)
@@ -100,8 +107,8 @@ class ProjectSettingsDialog(QDialog):
             QLabel("Resize the canvas and scale all frame and layer pixels to the new size.")
         )
 
-        anchor_group = QGroupBox("Anchor")
-        anchor_grid = QGridLayout(anchor_group)
+        self.anchor_group = QGroupBox("Anchor")
+        anchor_grid = QGridLayout(self.anchor_group)
         self.anchor_buttons = QButtonGroup(self)
         anchors = (
             (CanvasAnchor.TOP_LEFT, "↖", 0, 0),
@@ -124,8 +131,8 @@ class ProjectSettingsDialog(QDialog):
             anchor_grid.addWidget(button, row, column)
             if anchor is CanvasAnchor.CENTER:
                 button.setChecked(True)
-        canvas_layout.addWidget(anchor_group)
-        layout.addWidget(canvas_group)
+        canvas_layout.addWidget(self.anchor_group)
+        layout.addWidget(self.canvas_group)
 
         self.info_label = QLabel(
             f"File: {project_path if project_path else 'Not Saved'}\n"
@@ -151,12 +158,35 @@ class ProjectSettingsDialog(QDialog):
         layout.addWidget(buttons)
 
         self.name_edit.textChanged.connect(self._validate)
-        self.scale_radio.toggled.connect(anchor_group.setDisabled)
+        self.scale_radio.toggled.connect(self.anchor_group.setDisabled)
+        self._validate()
+        if localization is not None:
+            localization.language_changed.connect(self.retranslate_ui)
+            self.retranslate_ui()
+
+    def retranslate_ui(self, *args) -> None:
+        if self.localization is None:
+            return
+        t = self.localization.text
+        self.setWindowTitle(t("dialog.project_settings"))
+        self.general_group.setTitle(t("dialog.general"))
+        self.canvas_group.setTitle(t("dialog.canvas"))
+        self.anchor_group.setTitle(t("dialog.anchor"))
+        self.name_label.setText(t("dialog.project_name"))
+        self.fps_label.setText("FPS")
+        self.current_size_field_label.setText(t("dialog.current_size"))
+        self.width_label.setText(t("dialog.new_width"))
+        self.height_label.setText(t("dialog.new_height"))
+        self.loop_check.setText(t("dialog.loop"))
+        self.canvas_only_radio.setText(t("dialog.canvas_only"))
+        self.scale_radio.setText(t("dialog.scale_canvas"))
+        self.apply_button.setText(t("shortcut.apply"))
         self._validate()
 
     def _validate(self) -> None:
         valid = bool(self.name_edit.text().strip())
-        self.validation_label.setText("" if valid else "Enter a project name.")
+        message = self.localization.text("dialog.enter_name") if self.localization else "Enter a project name."
+        self.validation_label.setText("" if valid else message)
         self.apply_button.setEnabled(valid)
 
     def settings(self) -> ProjectSettingsValues:

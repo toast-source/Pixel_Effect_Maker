@@ -9,8 +9,13 @@ import numpy as np
 
 from .frame import Frame, empty_pixels
 from .layer import Layer
+from .source_asset import SourceAsset
+from .effect_generator import TransformEmitter
+from .animation_clip import AnimationClipAsset
+from .particle_emitter import ParticleEmitter
+from .resource_composition import ResourceComposition
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 5
 
 
 class ProjectError(ValueError):
@@ -28,6 +33,11 @@ class Project:
     loop: bool = True
     layers: list[Layer] = field(default_factory=list)
     frames: list[Frame] = field(default_factory=list)
+    source_assets: list[SourceAsset] = field(default_factory=list)
+    generators: list[TransformEmitter] = field(default_factory=list)
+    animation_clips: list[AnimationClipAsset] = field(default_factory=list)
+    particle_emitters: list[ParticleEmitter] = field(default_factory=list)
+    resource_compositions: list[ResourceComposition] = field(default_factory=list)
     format_version: int = FORMAT_VERSION
 
     def __post_init__(self) -> None:
@@ -72,6 +82,12 @@ class Project:
         if len(self.layers) <= 1:
             raise ProjectError("a project must contain at least one layer")
         layer = self.layers.pop(index)
+        for generator in self.generators:
+            if generator.generated_layer_id == layer.id:
+                generator.generated_layer_id = None
+        for emitter in self.particle_emitters:
+            if emitter.generated_layer_id == layer.id:
+                emitter.generated_layer_id = None
         for frame in self.frames:
             frame.layer_pixels.pop(layer.id, None)
 
@@ -132,12 +148,17 @@ class Project:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "format_version": self.format_version,
+            "format_version": FORMAT_VERSION,
             "name": self.name,
             "canvas": {"width": self.width, "height": self.height},
             "animation": {"fps": self.fps, "loop": self.loop},
             "layers": [layer.to_dict() for layer in self.layers],
             "frames": [frame.to_dict() for frame in self.frames],
+            "source_assets": [asset.to_dict() for asset in self.source_assets],
+            "generators": [generator.to_dict() for generator in self.generators],
+            "animation_clips": [clip.to_dict() for clip in self.animation_clips],
+            "particle_emitters": [emitter.to_dict() for emitter in self.particle_emitters],
+            "resource_compositions": [composition.to_dict() for composition in self.resource_compositions],
         }
 
     @classmethod
@@ -145,13 +166,13 @@ class Project:
         if not isinstance(data, dict):
             raise ProjectError("project root must be a JSON object")
         version = data.get("format_version")
-        if version != FORMAT_VERSION:
+        if version not in (1, 2, 3, 4, FORMAT_VERSION):
             raise ProjectError(f"unsupported format_version: {version!r}")
         try:
             canvas = data["canvas"]
             animation = data["animation"]
             project = cls(
-                format_version=int(version),
+                format_version=FORMAT_VERSION,
                 name=str(data.get("name", "Untitled")),
                 width=int(canvas["width"]),
                 height=int(canvas["height"]),
@@ -163,6 +184,20 @@ class Project:
                 Frame.from_dict(item, project.width, project.height)
                 for item in data.get("frames", [])
             ]
+            if int(version) >= 2:
+                project.source_assets = [
+                    SourceAsset.from_dict(item)
+                    for item in data.get("source_assets", [])
+                ]
+                project.generators = [
+                    TransformEmitter.from_dict(item)
+                    for item in data.get("generators", [])
+                ]
+            if int(version) >= 3:
+                project.animation_clips = [AnimationClipAsset.from_dict(item) for item in data.get("animation_clips", [])]
+                project.particle_emitters = [ParticleEmitter.from_dict(item) for item in data.get("particle_emitters", [])]
+            if int(version) >= 5:
+                project.resource_compositions = [ResourceComposition.from_dict(item) for item in data.get("resource_compositions", [])]
         except (KeyError, TypeError, ValueError) as exc:
             raise ProjectError(f"invalid project data: {exc}") from exc
         if not project.layers or not project.frames:
@@ -178,4 +213,40 @@ class Project:
                 frame.layer_pixels.setdefault(
                     layer.id, empty_pixels(project.width, project.height)
                 )
+        asset_ids = {asset.id for asset in project.source_assets}
+        if len(asset_ids) != len(project.source_assets):
+            raise ProjectError("source asset IDs must be unique")
+        generator_ids = {generator.id for generator in project.generators}
+        if len(generator_ids) != len(project.generators):
+            raise ProjectError("generator IDs must be unique")
+        for generator in project.generators:
+            if generator.settings.source_asset_id not in asset_ids:
+                raise ProjectError("generator references an unknown source asset")
+            if (
+                generator.generated_layer_id is not None
+                and generator.generated_layer_id not in layer_ids
+            ):
+                raise ProjectError("generator references an unknown generated layer")
+        clip_ids = {clip.id for clip in project.animation_clips}
+        if len(clip_ids) != len(project.animation_clips):
+            raise ProjectError("animation clip IDs must be unique")
+        emitter_ids = {emitter.id for emitter in project.particle_emitters}
+        if len(emitter_ids) != len(project.particle_emitters):
+            raise ProjectError("particle emitter IDs must be unique")
+        composition_ids={composition.id for composition in project.resource_compositions}
+        for emitter in project.particle_emitters:
+            valid_ids = clip_ids if emitter.settings.resource_type == "animation_clip" else composition_ids if emitter.settings.resource_type == "resource_composition" else asset_ids
+            if emitter.settings.clip_asset_id not in valid_ids:
+                raise ProjectError("particle emitter references an unknown animation clip")
+            if emitter.generated_layer_id is not None and emitter.generated_layer_id not in layer_ids:
+                raise ProjectError("particle emitter references an unknown generated layer")
+        if len({c.id for c in project.resource_compositions})!=len(project.resource_compositions):raise ProjectError("resource composition IDs must be unique")
+        for composition in project.resource_compositions:
+            for layer in composition.layers:
+                valid=asset_ids if layer.source_type=="source_asset" else clip_ids
+                if layer.source_id not in valid:raise ProjectError("composition layer references an unknown asset")
+                if layer.end_frame>=composition.frame_count or layer.source_start_frame<0:raise ProjectError("composition layer range is outside the composition")
+                for property_id,track in layer.tracks.items():
+                    if property_id!=track.property_id:raise ProjectError("composition track ID does not match its property")
+                    if any(key.frame>=composition.frame_count for key in track.keyframes):raise ProjectError("composition keyframe is outside the composition")
         return project

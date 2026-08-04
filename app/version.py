@@ -1,7 +1,7 @@
 """Central application version information."""
 
 APP_NAME = "Pixel Effect Maker"
-__version__ = "0.0.02"
+__version__ = "0.0.04"
 VERSION_LABEL = f"v{__version__}"
 
 
